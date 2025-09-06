@@ -9,7 +9,8 @@ import (
 func TestSerializeDeserialize(t *testing.T) {
 	original := []byte("hello test")
 
-	serialized := SerializeMessage(original)
+	meg := TunnelMessage{Body: original, Type: REQUEST}
+	serialized := SerializeMessage(meg)
 
 	reader := bufio.NewReader(bytes.NewReader(serialized))
 
@@ -18,7 +19,7 @@ func TestSerializeDeserialize(t *testing.T) {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	if string(deserialized) != string(original) {
+	if string(deserialized.Body) != string(original) {
 		t.Errorf("expected %q, got %q", original, deserialized)
 	}
 }

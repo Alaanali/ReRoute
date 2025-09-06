@@ -11,6 +11,8 @@ import (
 const (
 	REQUEST = uint8(iota)
 	RESPONSE
+	HEARTBEAT
+	HEARTBEATOK
 )
 
 const VERSION = 1
@@ -22,18 +24,23 @@ const MESSAGE_DATA_DELIMITER = '\n'
    1 byte    |  1 byte       |  1 or more bytes  | 1 byte   | variable length
 */
 
-func SerializeMessage(body []byte) []byte {
-	finalMessage := [][]byte{}
-	finalMessage = append(finalMessage, []byte{byte(VERSION), byte(REQUEST)})
+type TunnelMessage struct {
+	Type uint8
+	Body []byte
+}
 
-	finalMessage = append(finalMessage, []byte(strconv.Itoa(len(body))))
+func SerializeMessage(msg TunnelMessage) []byte {
+	finalMessage := [][]byte{}
+	finalMessage = append(finalMessage, []byte{byte(VERSION), byte(msg.Type)})
+
+	finalMessage = append(finalMessage, []byte(strconv.Itoa(len(msg.Body))))
 	finalMessage = append(finalMessage, []byte{byte(MESSAGE_DATA_DELIMITER)})
-	finalMessage = append(finalMessage, body)
+	finalMessage = append(finalMessage, msg.Body)
 
 	return bytes.Join(finalMessage, nil)
 }
 
-func DeserializeMessage(r *bufio.Reader) ([]byte, error) {
+func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 	version, err := r.ReadByte()
 	if err != nil {
 		return nil, err
@@ -48,7 +55,7 @@ func DeserializeMessage(r *bufio.Reader) ([]byte, error) {
 		return nil, err
 	}
 
-	if uint8(messageType) != REQUEST && uint8(messageType) != RESPONSE {
+	if uint8(messageType) != REQUEST && uint8(messageType) != RESPONSE && uint8(messageType) != HEARTBEAT && uint8(messageType) != HEARTBEATOK {
 		return nil, fmt.Errorf("invalid message type: %d", messageType)
 	}
 
@@ -69,6 +76,7 @@ func DeserializeMessage(r *bufio.Reader) ([]byte, error) {
 		return nil, err
 	}
 
-	return body, nil
+	msg := TunnelMessage{Body: body, Type: messageType}
+	return &msg, nil
 
 }

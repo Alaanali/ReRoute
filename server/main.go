@@ -11,13 +11,18 @@ import (
 func handleRequest(conn net.Conn) {
 	defer conn.Close()
 	rd := bufio.NewReader(conn)
-	msg, err := protocol.DeserializeMessage(rd)
-	if err != nil {
-		log.Fatalln(err)
+	for {
+
+		msg, err := protocol.DeserializeMessage(rd)
+		if err != nil {
+			return
+		}
+		println("Clinet sent ", string(msg.Body))
+
+		resp := protocol.TunnelMessage{Body: []byte("Hello World for server!"), Type: protocol.RESPONSE}
+		respMsg := protocol.SerializeMessage(resp)
+		conn.Write(respMsg)
 	}
-	println("Clinet sent ", string(msg))
-	msg = protocol.SerializeMessage([]byte("Hello World for server!"))
-	conn.Write(msg)
 }
 func main() {
 	listner, err := net.Listen("tcp", "localhost:5500")
