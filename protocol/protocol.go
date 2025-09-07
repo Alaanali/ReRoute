@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"fmt"
 	"io"
+	"net"
 	"strconv"
 )
 
@@ -12,7 +13,9 @@ const (
 	REQUEST = uint8(iota)
 	RESPONSE
 	HEARTBEAT
-	HEARTBEATOK
+	HEARTBEAT_OK
+	CONNECTION_REQUEST
+	CONNECTION_ACCEPTED
 )
 
 const VERSION = 1
@@ -27,6 +30,11 @@ const MESSAGE_DATA_DELIMITER = '\n'
 type TunnelMessage struct {
 	Type uint8
 	Body []byte
+}
+
+type Tunnel struct {
+	Id   string
+	Conn net.Conn
 }
 
 func SerializeMessage(msg TunnelMessage) []byte {
@@ -55,7 +63,10 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 		return nil, err
 	}
 
-	if uint8(messageType) != REQUEST && uint8(messageType) != RESPONSE && uint8(messageType) != HEARTBEAT && uint8(messageType) != HEARTBEATOK {
+	switch uint8(messageType) {
+	case REQUEST, RESPONSE, HEARTBEAT, HEARTBEAT_OK, CONNECTION_ACCEPTED, CONNECTION_REQUEST:
+		// valid
+	default:
 		return nil, fmt.Errorf("invalid message type: %d", messageType)
 	}
 
@@ -78,5 +89,13 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 
 	msg := TunnelMessage{Body: body, Type: messageType}
 	return &msg, nil
+
+}
+
+func (t *Tunnel) SendMessage(body []byte, msgType uint8) {
+	// TODO handle and return errors
+	msg := TunnelMessage{Body: body, Type: msgType}
+	req := SerializeMessage(msg)
+	t.Conn.Write(req)
 
 }

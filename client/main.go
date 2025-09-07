@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
 	"log"
 	"net"
@@ -10,28 +11,52 @@ import (
 	"github.com/Alaanali/ReRoute/protocol"
 )
 
-func sendheartbeat(conn net.Conn) {
-	msg := protocol.TunnelMessage{Type: protocol.HEARTBEAT}
-	resp := protocol.SerializeMessage(msg)
-	conn.Write(resp)
-	rd := bufio.NewReader(conn)
-	serverResp, err := protocol.DeserializeMessage(rd)
+const (
+	PAUSE = uint8(iota)
+	RESUME
+)
 
-	if err != nil {
-		log.Fatalln("gege", err)
-	}
-
-	fmt.Println(string(serverResp.Body))
+type Client struct {
+	protocol.Tunnel
+	heartbeatchan chan uint8
 }
-func heartbeatTicker(conn net.Conn, heartbeatchan <-chan string) {
+
+func (c *Client) handleTCPConnection() {
+	rd := bufio.NewReader(c.Conn)
+
+	for {
+		resp, err := protocol.DeserializeMessage(rd)
+		if err != nil {
+			log.Fatalln(err)
+		}
+
+		c.heartbeatchan <- PAUSE
+
+		switch resp.Type {
+		case protocol.REQUEST:
+			r := [][]byte{}
+			r = append(r, []byte("received"))
+			r = append(r, resp.Body)
+			c.SendMessage(bytes.Join(r, []byte(" ")), protocol.RESPONSE)
+
+		case protocol.CONNECTION_ACCEPTED:
+			c.Id = string(resp.Body)
+			fmt.Println("Your subdomain is ", c.Id)
+		}
+
+		c.heartbeatchan <- RESUME
+
+	}
+}
+func (client *Client) heartbeatTicker() {
 
 	ticker := time.NewTicker(time.Second * 5)
 	paused := false
 
 	for {
 		select {
-		case cmd := <-heartbeatchan:
-			if cmd == "pause" {
+		case cmd := <-client.heartbeatchan:
+			if cmd == PAUSE {
 				paused = true
 			} else {
 				paused = false
@@ -39,7 +64,7 @@ func heartbeatTicker(conn net.Conn, heartbeatchan <-chan string) {
 
 		case <-ticker.C:
 			if !paused {
-				sendheartbeat(conn)
+				client.SendMessage(nil, protocol.HEARTBEAT)
 			}
 		}
 	}
@@ -51,20 +76,13 @@ func main() {
 		log.Fatalln(err)
 	}
 
-	msg := protocol.TunnelMessage{Body: []byte("hello  from clinet"), Type: protocol.REQUEST}
-	req := protocol.SerializeMessage(msg)
+	heartbeatchan := make(chan uint8, 1)
+	client := Client{protocol.Tunnel{Conn: conn, Id: ""}, heartbeatchan}
 
-	conn.Write(req)
-	rd := bufio.NewReader(conn)
+	go client.handleTCPConnection()
+	go client.heartbeatTicker()
 
-	resp, err := protocol.DeserializeMessage(rd)
-	if err != nil {
-		log.Fatalln(err)
-	}
-	fmt.Println("server sent ", string(resp.Body))
-
-	heartbeat := make(chan string, 1)
-	go heartbeatTicker(conn, heartbeat)
+	client.SendMessage([]byte{}, protocol.CONNECTION_REQUEST)
 
 	for {
 		time.Sleep(time.Second * 50)
