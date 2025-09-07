@@ -54,6 +54,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
+	start := time.Now()
 	resp, err := http.DefaultClient.Do(decodedRequest.WithContext(ctx))
 	if err != nil {
 		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
@@ -61,6 +62,8 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	}
 
 	defer resp.Body.Close()
+	duration := time.Since(start)
+	c.printRequest(resp, decodedRequest, duration)
 
 	encodedResponse, err := protocol.EncodeResponse(resp)
 	if err != nil {
@@ -87,6 +90,7 @@ func (c *Client) handleTCPConnection() {
 
 		case protocol.CONNECTION_ACCEPTED:
 			c.Id = string(resp.Body)
+			c.printTunnelInfo()
 		}
 
 		c.heartbeatchan <- RESUME
@@ -123,6 +127,9 @@ func main() {
 
 	flag.Parse()
 	conf := Configuration{*tunnelHost, *tunnelPort, *localhostPort}
+
+	// Clear the terminal screen
+	fmt.Print("\033[H\033[2J\033[3J")
 
 	conn, err := net.DialTimeout("tcp", net.JoinHostPort(conf.tunnelHost, conf.tunnelPort), time.Second*30)
 	if err != nil {
