@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -17,7 +16,7 @@ import (
 
 type Client struct {
 	protocol.Tunnel
-	tunnelOutbound chan OutBoundResponse
+	tunnelOutbound chan protocol.TunnelMessage
 	httpRequests   chan HttpRequest
 }
 
@@ -26,13 +25,9 @@ type Server struct {
 	clients map[string]Client
 }
 
-type OutBoundResponse struct {
-	body []byte
-}
-
 type HttpRequest struct {
 	body     []byte
-	response chan OutBoundResponse
+	response chan protocol.TunnelMessage
 }
 
 func (s *Server) handleTCPRequest(client *Client) {
@@ -46,8 +41,8 @@ func (s *Server) handleTCPRequest(client *Client) {
 
 		switch msg.Type {
 
-		case protocol.RESPONSE:
-			client.tunnelOutbound <- OutBoundResponse{body: msg.Body}
+		case protocol.RESPONSE, protocol.ERROR:
+			client.tunnelOutbound <- *msg
 
 		case protocol.HEARTBEAT:
 			client.SendMessage([]byte{}, protocol.HEARTBEAT_OK)
@@ -71,14 +66,14 @@ func (s *Server) handleInboundRequests(client *Client) {
 			return
 		}
 
-		in.response <- OutBoundResponse{res.body}
+		in.response <- res
 	}
 
 }
 
 func (s *Server) handleTCPConnection(conn net.Conn) {
 	uniqueID := uuid.New().String()
-	tunnelOutbound := make(chan OutBoundResponse)
+	tunnelOutbound := make(chan protocol.TunnelMessage)
 	httpRequests := make(chan HttpRequest)
 
 	client := Client{protocol.Tunnel{Id: uniqueID, Conn: conn}, tunnelOutbound, httpRequests}
@@ -96,27 +91,32 @@ func (s *Server) handleTCPConnection(conn net.Conn) {
 
 func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	subDomain := strings.Split(r.Host, ".")[0]
-	fmt.Println("subDomain is ", subDomain)
+
 	client, ok := s.clients[subDomain]
 	if !ok {
-		// TODO return error to the caller
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
 	encodedRequest, err := protocol.EncodeRequest(r)
 	if err != nil {
-		// TODO return error to the caller
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
-	response := make(chan OutBoundResponse)
+	response := make(chan protocol.TunnelMessage)
 	client.httpRequests <- HttpRequest{encodedRequest, response}
 
 	res := <-response
 
-	decodedResponse, err := protocol.DecodeResponse(res.body, r)
+	if res.Type == protocol.ERROR {
+		http.Error(w, string(res.Body), http.StatusInternalServerError)
+		return
+	}
+
+	decodedResponse, err := protocol.DecodeResponse(res.Body, r)
 	if err != nil {
-		// TODO return error to the caller
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 
@@ -131,7 +131,7 @@ func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(decodedResponse.StatusCode)
 	_, err = io.Copy(w, decodedResponse.Body)
 	if err != nil {
-		// TODO return error to the caller
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 		return
 	}
 

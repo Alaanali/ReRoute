@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -33,7 +34,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	decodedRequest, err := protocol.DecodeRequest(body)
 
 	if err != nil {
-		// TODO handle error
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
 		return
 	}
 	defer decodedRequest.Body.Close()
@@ -43,16 +44,19 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	localhostURL, err := url.Parse(localhost)
 
 	if err != nil {
-		// TODO handle error
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
 		return
 	}
 
 	decodedRequest.URL = localhostURL
 	decodedRequest.RequestURI = ""
 
-	resp, err := http.DefaultClient.Do(decodedRequest)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	resp, err := http.DefaultClient.Do(decodedRequest.WithContext(ctx))
 	if err != nil {
-		// TODO handle error
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
 		return
 	}
 
@@ -60,7 +64,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 
 	encodedResponse, err := protocol.EncodeResponse(resp)
 	if err != nil {
-		// TODO handle error
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
 		return
 	}
 	c.SendMessage(encodedResponse, protocol.RESPONSE)
@@ -83,7 +87,6 @@ func (c *Client) handleTCPConnection() {
 
 		case protocol.CONNECTION_ACCEPTED:
 			c.Id = string(resp.Body)
-			fmt.Println("Your subdomain is ", c.Id)
 		}
 
 		c.heartbeatchan <- RESUME

@@ -18,9 +18,11 @@ const (
 	HEARTBEAT_OK
 	CONNECTION_REQUEST
 	CONNECTION_ACCEPTED
+	ERROR
 )
 
 const VERSION = 1
+const ERROR_MESSAGE = "Something went wrong"
 
 /*
    Version   | MessageType   |  Body Length     | body
@@ -66,7 +68,7 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 	}
 
 	switch uint8(messageType) {
-	case REQUEST, RESPONSE, HEARTBEAT, HEARTBEAT_OK, CONNECTION_ACCEPTED, CONNECTION_REQUEST:
+	case REQUEST, RESPONSE, HEARTBEAT, HEARTBEAT_OK, CONNECTION_ACCEPTED, CONNECTION_REQUEST, ERROR:
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid message type: %d", messageType)
@@ -89,11 +91,11 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 
 }
 
-func (t *Tunnel) SendMessage(body []byte, msgType uint8) {
-	// TODO handle and return errors
+func (t *Tunnel) SendMessage(body []byte, msgType uint8) error {
 	msg := TunnelMessage{Body: body, Type: msgType}
 	req := SerializeMessage(msg)
-	t.Conn.Write(req)
+	_, err := t.Conn.Write(req)
+	return err
 
 }
 
