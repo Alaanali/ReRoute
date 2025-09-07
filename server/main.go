@@ -50,8 +50,7 @@ func (s *Server) handleTCPRequest(client *Client) {
 			client.tunnelOutbound <- OutBoundResponse{body: msg.Body}
 
 		case protocol.HEARTBEAT:
-			msg := fmt.Appendf([]byte("Hello World from Server client"), "%s", client.Id)
-			client.SendMessage(msg, protocol.HEARTBEAT_OK)
+			client.SendMessage([]byte{}, protocol.HEARTBEAT_OK)
 		}
 
 	}
@@ -78,14 +77,14 @@ func (s *Server) handleInboundRequests(client *Client) {
 }
 
 func (s *Server) handleTCPConnection(conn net.Conn) {
-	uniqeID := uuid.New().String()
+	uniqueID := uuid.New().String()
 	tunnelOutbound := make(chan OutBoundResponse)
 	httpRequests := make(chan HttpRequest)
 
-	client := Client{protocol.Tunnel{Id: uniqeID, Conn: conn}, tunnelOutbound, httpRequests}
+	client := Client{protocol.Tunnel{Id: uniqueID, Conn: conn}, tunnelOutbound, httpRequests}
 
 	s.mu.Lock()
-	s.clients[uniqeID] = client
+	s.clients[uniqueID] = client
 	s.mu.Unlock()
 
 	go s.handleTCPRequest(&client)
@@ -123,8 +122,8 @@ func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 
 	defer decodedResponse.Body.Close()
 
-	for key, valuse := range decodedResponse.Header {
-		for _, v := range valuse {
+	for key, values := range decodedResponse.Header {
+		for _, v := range values {
 			w.Header().Add(key, v)
 		}
 	}

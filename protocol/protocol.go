@@ -23,8 +23,8 @@ const (
 const VERSION = 1
 
 /*
-   Version   | MessageType   |  Body Lenght      | delimter | body
-   1 byte    |  1 byte       |  1 or more bytes  | 1 byte   | variable length
+   Version   | MessageType   |  Body Length     | body
+   1 byte    |  1 byte       |  8 bytes         | variable length
 */
 
 type TunnelMessage struct {
