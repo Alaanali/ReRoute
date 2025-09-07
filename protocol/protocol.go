@@ -3,12 +3,12 @@ package protocol
 import (
 	"bufio"
 	"bytes"
+	"encoding/binary"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
-	"strconv"
 )
 
 const (
@@ -21,8 +21,6 @@ const (
 )
 
 const VERSION = 1
-
-const MESSAGE_DATA_DELIMITER = '\n'
 
 /*
    Version   | MessageType   |  Body Lenght      | delimter | body
@@ -43,8 +41,10 @@ func SerializeMessage(msg TunnelMessage) []byte {
 	finalMessage := [][]byte{}
 	finalMessage = append(finalMessage, []byte{byte(VERSION), byte(msg.Type)})
 
-	finalMessage = append(finalMessage, []byte(strconv.Itoa(len(msg.Body))))
-	finalMessage = append(finalMessage, []byte{byte(MESSAGE_DATA_DELIMITER)})
+	messageLength := make([]byte, 8)
+	binary.BigEndian.PutUint64(messageLength, uint64(len(msg.Body)))
+
+	finalMessage = append(finalMessage, messageLength)
 	finalMessage = append(finalMessage, msg.Body)
 
 	return bytes.Join(finalMessage, nil)
@@ -72,18 +72,13 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 		return nil, fmt.Errorf("invalid message type: %d", messageType)
 	}
 
-	messageLength, err := r.ReadString(MESSAGE_DATA_DELIMITER)
-
+	var messageLength uint64
+	err = binary.Read(r, binary.BigEndian, &messageLength)
 	if err != nil {
 		return nil, err
 	}
 
-	n, err := strconv.Atoi(messageLength[:len(messageLength)-1])
-	if err != nil {
-		return nil, err
-	}
-
-	body := make([]byte, n)
+	body := make([]byte, messageLength)
 	_, err = io.ReadFull(r, body)
 	if err != nil {
 		return nil, err
