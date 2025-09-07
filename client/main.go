@@ -2,11 +2,12 @@ package main
 
 import (
 	"bufio"
-	"bytes"
 	"flag"
 	"fmt"
 	"log"
 	"net"
+	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/Alaanali/ReRoute/protocol"
@@ -28,6 +29,43 @@ type Client struct {
 	heartbeatchan chan uint8
 }
 
+func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
+	decodedRequest, err := protocol.DecodeRequest(body)
+
+	if err != nil {
+		// TODO handle error
+		return
+	}
+	defer decodedRequest.Body.Close()
+
+	localhost := fmt.Sprintf("http://localhost:%v%v", c.localhostPort, decodedRequest.RequestURI)
+
+	localhostURL, err := url.Parse(localhost)
+
+	if err != nil {
+		// TODO handle error
+		return
+	}
+
+	decodedRequest.URL = localhostURL
+	decodedRequest.RequestURI = ""
+
+	resp, err := http.DefaultClient.Do(decodedRequest)
+	if err != nil {
+		// TODO handle error
+		return
+	}
+
+	defer resp.Body.Close()
+
+	encodedResponse, err := protocol.EncodeResponse(resp)
+	if err != nil {
+		// TODO handle error
+		return
+	}
+	c.SendMessage(encodedResponse, protocol.RESPONSE)
+}
+
 func (c *Client) handleTCPConnection() {
 	rd := bufio.NewReader(c.Conn)
 
@@ -41,10 +79,7 @@ func (c *Client) handleTCPConnection() {
 
 		switch resp.Type {
 		case protocol.REQUEST:
-			r := [][]byte{}
-			r = append(r, []byte("received"))
-			r = append(r, resp.Body)
-			c.SendMessage(bytes.Join(r, []byte(" ")), protocol.RESPONSE)
+			go c.handleIncomingRequestOverTunnel(resp.Body)
 
 		case protocol.CONNECTION_ACCEPTED:
 			c.Id = string(resp.Body)
@@ -81,7 +116,7 @@ func main() {
 
 	tunnelPort := flag.String("tunnelPort", "5500", "port number of tunnel server")
 	tunnelHost := flag.String("tunnelHost", "localhost", "host of tunnel server")
-	localhostPort := flag.String("localhostPort", "8000", "port number of localhost service")
+	localhostPort := flag.String("localhostPort", "3000", "port number of localhost service")
 
 	flag.Parse()
 	conf := Configuration{*tunnelHost, *tunnelPort, *localhostPort}

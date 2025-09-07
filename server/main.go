@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"net/http"
@@ -95,20 +96,45 @@ func (s *Server) handleTCPConnection(conn net.Conn) {
 }
 
 func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
-	// This function shoudl handle the encode and decode of the response
 	subDomain := strings.Split(r.Host, ".")[0]
 	fmt.Println("subDomain is ", subDomain)
 	client, ok := s.clients[subDomain]
 	if !ok {
-		// 	// TODO return error to the caller
+		// TODO return error to the caller
 		return
 	}
-	w.Write([]byte(subDomain))
+
+	encodedRequest, err := protocol.EncodeRequest(r)
+	if err != nil {
+		// TODO return error to the caller
+		return
+	}
+
 	response := make(chan OutBoundResponse)
-	client.httpRequests <- HttpRequest{[]byte("test message"), response}
+	client.httpRequests <- HttpRequest{encodedRequest, response}
 
 	res := <-response
-	w.Write(res.body)
+
+	decodedResponse, err := protocol.DecodeResponse(res.body, r)
+	if err != nil {
+		// TODO return error to the caller
+		return
+	}
+
+	defer decodedResponse.Body.Close()
+
+	for key, valuse := range decodedResponse.Header {
+		for _, v := range valuse {
+			w.Header().Add(key, v)
+		}
+	}
+
+	w.WriteHeader(decodedResponse.StatusCode)
+	_, err = io.Copy(w, decodedResponse.Body)
+	if err != nil {
+		// TODO return error to the caller
+		return
+	}
 
 }
 func main() {

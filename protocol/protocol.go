@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/http/httputil"
 	"strconv"
 )
 
@@ -98,4 +100,22 @@ func (t *Tunnel) SendMessage(body []byte, msgType uint8) {
 	req := SerializeMessage(msg)
 	t.Conn.Write(req)
 
+}
+
+func EncodeRequest(req *http.Request) ([]byte, error) {
+	return httputil.DumpRequest(req, true)
+}
+
+func EncodeResponse(res *http.Response) ([]byte, error) {
+	return httputil.DumpResponse(res, true)
+}
+
+func DecodeRequest(data []byte) (*http.Request, error) {
+	reader := bufio.NewReader(bytes.NewReader(data))
+	return http.ReadRequest(reader)
+}
+
+func DecodeResponse(data []byte, req *http.Request) (*http.Response, error) {
+	reader := bufio.NewReader(bytes.NewReader(data))
+	return http.ReadResponse(reader, req)
 }
