@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"bytes"
+	"flag"
 	"fmt"
 	"log"
 	"net"
@@ -16,8 +17,14 @@ const (
 	RESUME
 )
 
+type Configuration struct {
+	tunnelHost    string
+	tunnelPort    string
+	localhostPort string
+}
 type Client struct {
 	protocol.Tunnel
+	Configuration
 	heartbeatchan chan uint8
 }
 
@@ -71,13 +78,21 @@ func (client *Client) heartbeatTicker() {
 }
 
 func main() {
-	conn, err := net.DialTimeout("tcp", "localhost:5500", time.Second*30)
+
+	tunnelPort := flag.String("tunnelPort", "5500", "port number of tunnel server")
+	tunnelHost := flag.String("tunnelHost", "localhost", "host of tunnel server")
+	localhostPort := flag.String("localhostPort", "8000", "port number of localhost service")
+
+	flag.Parse()
+	conf := Configuration{*tunnelHost, *tunnelPort, *localhostPort}
+
+	conn, err := net.DialTimeout("tcp", net.JoinHostPort(conf.tunnelHost, conf.tunnelPort), time.Second*30)
 	if err != nil {
 		log.Fatalln(err)
 	}
 
 	heartbeatchan := make(chan uint8, 1)
-	client := Client{protocol.Tunnel{Conn: conn, Id: ""}, heartbeatchan}
+	client := Client{protocol.Tunnel{Conn: conn}, conf, heartbeatchan}
 
 	go client.handleTCPConnection()
 	go client.heartbeatTicker()
