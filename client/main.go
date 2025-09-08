@@ -33,11 +33,11 @@ type Client struct {
 	heartbeatchan chan uint8
 }
 
-func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
-	decodedRequest, err := protocol.DecodeRequest(body)
+func (c *Client) handleIncomingRequestOverTunnel(msg *protocol.TunnelMessage) {
+	decodedRequest, err := protocol.DecodeRequest(msg.Body)
 
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, msg.Id)
 		return
 	}
 	defer decodedRequest.Body.Close()
@@ -47,7 +47,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	localhostURL, err := url.Parse(localhost)
 
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, msg.Id)
 		return
 	}
 
@@ -60,7 +60,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	start := time.Now()
 	resp, err := http.DefaultClient.Do(decodedRequest.WithContext(ctx))
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, msg.Id)
 		return
 	}
 
@@ -70,10 +70,10 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 
 	encodedResponse, err := protocol.EncodeResponse(resp)
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, msg.Id)
 		return
 	}
-	c.SendMessage(encodedResponse, protocol.RESPONSE, uuid.New())
+	c.SendMessage(encodedResponse, protocol.RESPONSE, msg.Id)
 }
 
 func (c *Client) handleTCPConnection() {
@@ -89,7 +89,7 @@ func (c *Client) handleTCPConnection() {
 
 		switch resp.Type {
 		case protocol.REQUEST:
-			go c.handleIncomingRequestOverTunnel(resp.Body)
+			go c.handleIncomingRequestOverTunnel(resp)
 
 		case protocol.CONNECTION_ACCEPTED:
 			c.Id = string(resp.Body)

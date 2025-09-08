@@ -8,6 +8,8 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"os"
+	"os/signal"
 	"strings"
 	"sync"
 	"time"
@@ -18,20 +20,15 @@ import (
 
 type Client struct {
 	protocol.Tunnel
-	tunnelOutbound chan protocol.TunnelMessage
-	httpRequests   chan HttpRequest
-	ctx            context.Context
-	cancel         context.CancelFunc
+	requests map[uuid.UUID]chan protocol.TunnelMessage
+	ctx      context.Context
+	cancel   context.CancelFunc
+	mu       sync.Mutex
 }
 
 type Server struct {
 	mu      sync.Mutex
-	clients map[string]Client
-}
-
-type HttpRequest struct {
-	body     []byte
-	response chan protocol.TunnelMessage
+	clients map[string]*Client
 }
 
 func (s *Server) handleClientDisconnect(client *Client) {
@@ -41,10 +38,14 @@ func (s *Server) handleClientDisconnect(client *Client) {
 	defer s.mu.Unlock()
 	if _, exists := s.clients[client.Id]; exists {
 		client.Conn.Close()
-		close(client.httpRequests)
-		close(client.tunnelOutbound)
 		delete(s.clients, client.Id)
 	}
+}
+
+func (client *Client) removeRequest(reqId uuid.UUID) {
+	client.mu.Lock()
+	delete(client.requests, reqId)
+	client.mu.Unlock()
 }
 
 func (s *Server) handleTCPRequests(client *Client) {
@@ -64,7 +65,12 @@ func (s *Server) handleTCPRequests(client *Client) {
 			switch msg.Type {
 
 			case protocol.RESPONSE, protocol.ERROR:
-				client.tunnelOutbound <- *msg
+				client.mu.Lock()
+				ch, ok := client.requests[msg.Id]
+				client.mu.Unlock()
+				if ok {
+					ch <- *msg
+				}
 
 			case protocol.HEARTBEAT:
 				client.SendMessage([]byte{}, protocol.HEARTBEAT_OK, uuid.New())
@@ -78,60 +84,22 @@ func (s *Server) handleTCPRequests(client *Client) {
 	}
 }
 
-func (s *Server) handleInboundRequests(client *Client) {
-	for {
-		select {
-
-		case <-client.ctx.Done():
-			return
-
-		case in, ok := <-client.httpRequests:
-
-			if !ok {
-				return
-			}
-
-			// TODO handle error on sending
-			client.SendMessage(in.body, protocol.REQUEST, uuid.New())
-
-			select {
-
-			case res, ok := <-client.tunnelOutbound:
-				if !ok {
-					return
-				}
-
-				in.response <- res
-
-			case <-client.ctx.Done():
-				return
-
-			case <-time.After(time.Second * 10): // Request timeout
-				in.response <- protocol.TunnelMessage{
-					Type: protocol.ERROR,
-					Body: []byte("Request timeout"),
-				}
-			}
-
-		}
-	}
-
-}
-
 func (s *Server) handleTCPConnection(conn net.Conn) {
 	uniqueID := uuid.New().String()
-	tunnelOutbound := make(chan protocol.TunnelMessage)
-	httpRequests := make(chan HttpRequest)
-
+	requests := make(map[uuid.UUID]chan protocol.TunnelMessage)
 	ctx, cancel := context.WithCancel(context.Background())
-	client := Client{protocol.Tunnel{Id: uniqueID, Conn: conn}, tunnelOutbound, httpRequests, ctx, cancel}
+	client := &Client{
+		Tunnel:   protocol.Tunnel{Id: uniqueID, Conn: conn},
+		requests: requests,
+		ctx:      ctx,
+		cancel:   cancel,
+	}
 
 	s.mu.Lock()
 	s.clients[uniqueID] = client
 	s.mu.Unlock()
 
-	go s.handleTCPRequests(&client)
-	go s.handleInboundRequests(&client)
+	go s.handleTCPRequests(client)
 
 	client.SendMessage([]byte(client.Id), protocol.CONNECTION_ACCEPTED, uuid.New())
 
@@ -152,22 +120,18 @@ func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	response := make(chan protocol.TunnelMessage)
+	responseChan := make(chan protocol.TunnelMessage, 1)
+	messageId := uuid.New()
+	defer client.removeRequest(messageId)
 
-	select {
-	case client.httpRequests <- HttpRequest{encodedRequest, response}:
-		// Success
-	case <-client.ctx.Done():
-		http.Error(w, "Client disconnected", http.StatusServiceUnavailable)
-		return
-	case <-r.Context().Done():
-		http.Error(w, "Request cancelled", http.StatusRequestTimeout)
-		return
-	}
+	client.mu.Lock()
+	client.requests[messageId] = responseChan
+	client.mu.Unlock()
+	client.SendMessage(encodedRequest, protocol.REQUEST, messageId)
 
 	select {
 
-	case res := <-response:
+	case res := <-responseChan:
 
 		if res.Type == protocol.ERROR {
 			http.Error(w, string(res.Body), http.StatusInternalServerError)
@@ -202,12 +166,17 @@ func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	case <-r.Context().Done():
 		http.Error(w, "Request cancelled", http.StatusRequestTimeout)
 		return
+	case <-time.After(30 * time.Second):
+		http.Error(w, "Gateway timeout", http.StatusGatewayTimeout)
+		return
 	}
 
 }
-func main() {
 
-	s := Server{clients: map[string]Client{}}
+func main() {
+	sigInt := make(chan os.Signal, 1)
+	signal.Notify(sigInt, os.Interrupt)
+	s := Server{clients: map[string]*Client{}}
 
 	go func() {
 		listner, err := net.Listen("tcp", "localhost:5500")
@@ -228,8 +197,7 @@ func main() {
 		http.ListenAndServe(":8000", nil)
 	}()
 
-	for {
-		time.Sleep(time.Second * 50)
-	}
+	<-sigInt
 
+	// currently nothing done after that
 }
