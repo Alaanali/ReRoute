@@ -4,54 +4,45 @@ A lightweight TCP tunnel implementation in Go that allows you to expose local se
 
 ## Architecture
 
-ReRoute consists of three main components:
+ReRoute enables secure tunneling of HTTP traffic through a persistent TCP connection:
 
 ```
-┌─────────────────┐    TCP Connection    ┌─────────────────┐
-│                 │◄───────────────────►│                 │
-│  ReRoute Server │                     │  ReRoute Client │
-│   (Public)      │                     │   (Local)       │
-│                 │                     │                 │
-└─────────┬───────┘                     └─────────┬───────┘
-          │                                       │
-          │ HTTP Requests                         │
-          │                                       │
-          ▼                                       ▼
-┌─────────────────┐                     ┌─────────────────┐
-│   Web Browser   │                     │ Local Service   │
-│                 │                     │ (localhost:3000)│
-└─────────────────┘                     └─────────────────┘
+    Internet                    Local Network
+        │                           │
+        ▼                           ▼
+┌───────────────┐               ┌───────────────┐
+│ ReRoute Server│◄─────TCP──────►│ ReRoute Client│
+│   (Public)    │               │   (Local)     │
+└───────┬───────┘               └───────┬───────┘
+        │                               │
+        │ HTTP Requests                 │ HTTP Requests
+        │ (UUID Correlated)             │ (to localhost)
+        ▼                               ▼
+┌───────────────┐               ┌───────────────┐
+│  Web Browser  │               │ Local Service │
+│               │               │ localhost:3000│
+└───────────────┘               └───────────────┘
 ```
 
-### Protocol Design
+## Protocol Design
 
-ReRoute uses a custom binary protocol for efficient communication:
+ReRoute uses a custom binary protocol with UUID-based message correlation:
 
 ```
-+----------+-------------+--------------+--------------+
-| Version  | MessageType | Body Length  |     Body     |
-| 1 byte   |   1 byte    |   8 bytes    |   Variable   |
-+----------+-------------+--------------+--------------+
++----------+-------------+------------------+--------------+--------------+
+| Version  | MessageType | Message ID (UUID)| Body Length  |     Body     |
+| 1 byte   |   1 byte    |    16 bytes      |   8 bytes    |   Variable   |
++----------+-------------+------------------+--------------+--------------+
 ```
 
 **Message Types:**
-- `REQUEST` - HTTP request forwarding
-- `RESPONSE` - HTTP response forwarding  
+- `REQUEST` - HTTP request forwarding (with UUID correlation)
+- `RESPONSE` - HTTP response forwarding (matched by UUID)
 - `HEARTBEAT` - Connection health check
 - `CONNECTION_REQUEST` - Initial client connection
-- `CONNECTION_ACCEPTED` - Server acknowledgment
+- `CONNECTION_ACCEPTED` - Server acknowledgment with client ID
 - `DISCONNECT` - Graceful disconnection
-- `ERROR` - Error handling
-
-## Features
-
-- **Custom Binary Protocol** - Efficient message serialization with version support
-- **HTTP Tunneling** - Forward HTTP requests between client and server
-- **Connection Management** - Heartbeat mechanism with graceful disconnection
-- **Concurrent Processing** - Handle multiple requests simultaneously
-- **Timeout Handling** - Request timeouts and connection deadlines
-- **Colored Terminal Output** - Real-time request logging with timestamps
-- **Context-Based Cancellation** - Proper resource cleanup and goroutine management
+- `ERROR` - Error responses (correlated to original request)
 
 ## Usage
 
@@ -62,9 +53,9 @@ cd server
 go run main.go
 ```
 
-The server will listen on:
-- TCP connections: `localhost:5500`
-- HTTP requests: `localhost:8000`
+Server endpoints:
+- TCP tunnel connections: `localhost:5500`
+- HTTP request handling: `localhost:8000`
 
 ### Start the Client
 
@@ -73,58 +64,65 @@ cd client
 go run . --tunnelHost=localhost --tunnelPort=5500 --localhostPort=3000
 ```
 
-**Command Line Options:**
+**Configuration Options:**
 - `--tunnelHost`: Server hostname (default: localhost)
-- `--tunnelPort`: Server TCP port (default: 5500)  
+- `--tunnelPort`: Server TCP port (default: 5500)
 - `--localhostPort`: Local service port to tunnel (default: 3000)
 
-### Access Your Service
+### Client Output
 
-Once connected, you'll see output like:
-```
+```bash
 ============================================================
 🚀 Tunnel Active: http://abc123-def456.localhost:8000
 📡 Forwarding to: localhost:3000
 ============================================================
 Request Log:
 [14:32:15] ✓ GET    200 /api/users                    (45ms)
-[14:32:18] ✓ POST   201 /api/users                    (123ms)
-[14:32:22] ✗ GET    404 /api/nonexistent             (12ms)
+[14:32:18] ✓ POST   201 /api/users/new                (123ms)
+[14:32:22] ✗ GET    404 /api/nonexistent              (12ms)
+[14:32:25] ✓ PUT    200 /api/users/123                (67ms)
 ```
 
-Visit the tunnel URL to access your local service through the public endpoint.
+## Implementation Details
 
-## Implementation Highlights
+### UUID-Based Request Correlation
 
-### Concurrent Request Handling
-
-The server uses goroutines and channels to handle multiple clients and requests simultaneously:
+Each message includes a unique identifier for proper request-response matching:
 
 ```go
-go s.handleTCPRequest(&client)
-go s.handleInboundRequests(&client)
+type TunnelMessage struct {
+    Type uint8
+    Body []byte
+    Id   uuid.UUID  // Enables concurrent request processing
+}
 ```
 
-### Context-Based Resource Management
+### Concurrent Request Architecture
 
-Proper cleanup and cancellation using Go's context package:
+The server maintains per-request channels for isolated processing:
 
 ```go
-ctx, cancel := context.WithCancel(context.Background())
-client := Client{..., ctx, cancel}
+type Client struct {
+    requests map[uuid.UUID]chan protocol.TunnelMessage
+    mu       sync.Mutex  // Protects concurrent map access
+}
 
-// Graceful shutdown
-defer client.cancel()
+// Each HTTP request gets its own response channel
+responseChan := make(chan protocol.TunnelMessage, 1)
+messageId := uuid.New()
+client.requests[messageId] = responseChan
+client.SendMessage(encodedRequest, protocol.REQUEST, messageId)
 ```
 
 ### Binary Protocol Implementation
 
-Efficient message serialization with big-endian encoding:
+Efficient serialization with UUID support:
 
 ```go
 func SerializeMessage(msg TunnelMessage) []byte {
     finalMessage := [][]byte{}
     finalMessage = append(finalMessage, []byte{byte(VERSION), byte(msg.Type)})
+    finalMessage = append(finalMessage, msg.Id[:])  // 16-byte UUID
     
     messageLength := make([]byte, 8)
     binary.BigEndian.PutUint64(messageLength, uint64(len(msg.Body)))
@@ -136,54 +134,35 @@ func SerializeMessage(msg TunnelMessage) []byte {
 }
 ```
 
-## Technical Details
+## Testing
 
-### Error Handling and Timeouts
 
-- **Connection timeouts**: 30-second TCP read deadlines
-- **Request timeouts**: 10-second HTTP request processing
-- **Graceful disconnection**: Proper channel cleanup and context cancellation
-
-### Heartbeat Mechanism
-
-Maintains connection health with pausable heartbeat system:
-
-```go
-case <-ticker.C:
-    if !paused {
-        client.SendMessage(nil, protocol.HEARTBEAT)
-    }
+```bash
+cd protocol
+go test -v
 ```
 
-### HTTP Request/Response Serialization
-
-Uses Go's `httputil` package for reliable HTTP message handling:
-
-```go
-func EncodeRequest(req *http.Request) ([]byte, error) {
-    return httputil.DumpRequest(req, true)
-}
-```
 
 ## Dependencies
 
-- `github.com/google/uuid` - Unique client identification
+- `github.com/google/uuid` - UUID generation and parsing
 
 ## Project Structure
 
 ```
 .
 ├── client/
-│   ├── main.go          # Client implementation
-│   └── utils.go         # Terminal output utilities
+│   ├── main.go          # Client with UUID correlation
+│   └── utils.go         # Colored terminal output
 ├── server/
-│   └── main.go          # Server implementation  
+│   └── main.go          # Server with concurrent request handling
 ├── protocol/
-│   └── protocol.go      # Binary protocol definition
+│   ├── protocol.go      # Binary protocol with UUID support
+│   └── protocol_test.go # Protocol serialization tests
 └── colors/
     └── colors.go        # Terminal color utilities
 ```
 
 ## License
 
-MIT License - feel free to use this code for learning and experimentation.
+MIT License - Educational and experimental use encouraged.
