@@ -18,6 +18,7 @@ const (
 	HEARTBEAT_OK
 	CONNECTION_REQUEST
 	CONNECTION_ACCEPTED
+	DISCONNECT
 	ERROR
 )
 
@@ -68,7 +69,7 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 	}
 
 	switch uint8(messageType) {
-	case REQUEST, RESPONSE, HEARTBEAT, HEARTBEAT_OK, CONNECTION_ACCEPTED, CONNECTION_REQUEST, ERROR:
+	case REQUEST, RESPONSE, HEARTBEAT, HEARTBEAT_OK, CONNECTION_ACCEPTED, CONNECTION_REQUEST, ERROR, DISCONNECT:
 		// valid
 	default:
 		return nil, fmt.Errorf("invalid message type: %d", messageType)

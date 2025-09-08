@@ -2,6 +2,8 @@ package main
 
 import (
 	"bufio"
+	"context"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -18,6 +20,8 @@ type Client struct {
 	protocol.Tunnel
 	tunnelOutbound chan protocol.TunnelMessage
 	httpRequests   chan HttpRequest
+	ctx            context.Context
+	cancel         context.CancelFunc
 }
 
 type Server struct {
@@ -30,22 +34,45 @@ type HttpRequest struct {
 	response chan protocol.TunnelMessage
 }
 
+func (s *Server) handleClientDisconnect(client *Client) {
+	fmt.Println("Client ", client.Id, "sent disconnect")
+	client.cancel()
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if _, exists := s.clients[client.Id]; exists {
+		client.Conn.Close()
+		close(client.httpRequests)
+		close(client.tunnelOutbound)
+		delete(s.clients, client.Id)
+	}
+}
+
 func (s *Server) handleTCPRequest(client *Client) {
 	rd := bufio.NewReader(client.Conn)
 	for {
 
-		msg, err := protocol.DeserializeMessage(rd)
-		if err != nil {
+		select {
+		case <-client.ctx.Done():
 			return
-		}
+		default:
+			client.Conn.SetReadDeadline(time.Now().Add(time.Second * 30))
+			msg, err := protocol.DeserializeMessage(rd)
+			if err != nil {
+				return
+			}
 
-		switch msg.Type {
+			switch msg.Type {
 
-		case protocol.RESPONSE, protocol.ERROR:
-			client.tunnelOutbound <- *msg
+			case protocol.RESPONSE, protocol.ERROR:
+				client.tunnelOutbound <- *msg
 
-		case protocol.HEARTBEAT:
-			client.SendMessage([]byte{}, protocol.HEARTBEAT_OK)
+			case protocol.HEARTBEAT:
+				client.SendMessage([]byte{}, protocol.HEARTBEAT_OK)
+
+			case protocol.DISCONNECT:
+				s.handleClientDisconnect(client)
+				return
+			}
 		}
 
 	}
@@ -53,20 +80,40 @@ func (s *Server) handleTCPRequest(client *Client) {
 
 func (s *Server) handleInboundRequests(client *Client) {
 	for {
-		in, ok := <-client.httpRequests
-		if !ok {
+		select {
+
+		case <-client.ctx.Done():
 			return
+
+		case in, ok := <-client.httpRequests:
+
+			if !ok {
+				return
+			}
+
+			// TODO handle error on sending
+			client.SendMessage(in.body, protocol.REQUEST)
+
+			select {
+
+			case res, ok := <-client.tunnelOutbound:
+				if !ok {
+					return
+				}
+
+				in.response <- res
+
+			case <-client.ctx.Done():
+				return
+
+			case <-time.After(time.Second * 10): // Request timeout
+				in.response <- protocol.TunnelMessage{
+					Type: protocol.ERROR,
+					Body: []byte("Request timeout"),
+				}
+			}
+
 		}
-
-		// TODO handle error on sending
-		client.SendMessage(in.body, protocol.REQUEST)
-
-		res, ok := <-client.tunnelOutbound
-		if !ok {
-			return
-		}
-
-		in.response <- res
 	}
 
 }
@@ -76,7 +123,8 @@ func (s *Server) handleTCPConnection(conn net.Conn) {
 	tunnelOutbound := make(chan protocol.TunnelMessage)
 	httpRequests := make(chan HttpRequest)
 
-	client := Client{protocol.Tunnel{Id: uniqueID, Conn: conn}, tunnelOutbound, httpRequests}
+	ctx, cancel := context.WithCancel(context.Background())
+	client := Client{protocol.Tunnel{Id: uniqueID, Conn: conn}, tunnelOutbound, httpRequests, ctx, cancel}
 
 	s.mu.Lock()
 	s.clients[uniqueID] = client
@@ -105,33 +153,54 @@ func (s *Server) handleHttpRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	response := make(chan protocol.TunnelMessage)
-	client.httpRequests <- HttpRequest{encodedRequest, response}
 
-	res := <-response
-
-	if res.Type == protocol.ERROR {
-		http.Error(w, string(res.Body), http.StatusInternalServerError)
+	select {
+	case client.httpRequests <- HttpRequest{encodedRequest, response}:
+		// Success
+	case <-client.ctx.Done():
+		http.Error(w, "Client disconnected", http.StatusServiceUnavailable)
+		return
+	case <-r.Context().Done():
+		http.Error(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	}
 
-	decodedResponse, err := protocol.DecodeResponse(res.Body, r)
-	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-		return
-	}
+	select {
 
-	defer decodedResponse.Body.Close()
+	case res := <-response:
 
-	for key, values := range decodedResponse.Header {
-		for _, v := range values {
-			w.Header().Add(key, v)
+		if res.Type == protocol.ERROR {
+			http.Error(w, string(res.Body), http.StatusInternalServerError)
+			return
 		}
-	}
 
-	w.WriteHeader(decodedResponse.StatusCode)
-	_, err = io.Copy(w, decodedResponse.Body)
-	if err != nil {
-		http.Error(w, "internal server error", http.StatusInternalServerError)
+		decodedResponse, err := protocol.DecodeResponse(res.Body, r)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+		defer decodedResponse.Body.Close()
+
+		for key, values := range decodedResponse.Header {
+			for _, v := range values {
+				w.Header().Add(key, v)
+			}
+		}
+
+		w.WriteHeader(decodedResponse.StatusCode)
+		_, err = io.Copy(w, decodedResponse.Body)
+		if err != nil {
+			http.Error(w, "internal server error", http.StatusInternalServerError)
+			return
+		}
+
+	case <-client.ctx.Done():
+		http.Error(w, "Client disconnected", http.StatusServiceUnavailable)
+		return
+
+	case <-r.Context().Done():
+		http.Error(w, "Request cancelled", http.StatusRequestTimeout)
 		return
 	}
 

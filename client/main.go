@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"os"
+	"os/signal"
 	"time"
 
 	"github.com/Alaanali/ReRoute/protocol"
@@ -121,6 +123,9 @@ func (client *Client) heartbeatTicker() {
 
 func main() {
 
+	sigInt := make(chan os.Signal, 1)
+	signal.Notify(sigInt, os.Interrupt)
+
 	tunnelPort := flag.String("tunnelPort", "5500", "port number of tunnel server")
 	tunnelHost := flag.String("tunnelHost", "localhost", "host of tunnel server")
 	localhostPort := flag.String("localhostPort", "3000", "port number of localhost service")
@@ -144,8 +149,8 @@ func main() {
 
 	client.SendMessage([]byte{}, protocol.CONNECTION_REQUEST)
 
-	for {
-		time.Sleep(time.Second * 50)
-	}
+	<-sigInt
+
+	client.SendMessage([]byte{}, protocol.DISCONNECT)
 
 }
