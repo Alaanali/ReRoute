@@ -47,7 +47,7 @@ func (s *Server) handleClientDisconnect(client *Client) {
 	}
 }
 
-func (s *Server) handleTCPRequest(client *Client) {
+func (s *Server) handleTCPRequests(client *Client) {
 	rd := bufio.NewReader(client.Conn)
 	for {
 
@@ -67,7 +67,7 @@ func (s *Server) handleTCPRequest(client *Client) {
 				client.tunnelOutbound <- *msg
 
 			case protocol.HEARTBEAT:
-				client.SendMessage([]byte{}, protocol.HEARTBEAT_OK)
+				client.SendMessage([]byte{}, protocol.HEARTBEAT_OK, uuid.New())
 
 			case protocol.DISCONNECT:
 				s.handleClientDisconnect(client)
@@ -92,7 +92,7 @@ func (s *Server) handleInboundRequests(client *Client) {
 			}
 
 			// TODO handle error on sending
-			client.SendMessage(in.body, protocol.REQUEST)
+			client.SendMessage(in.body, protocol.REQUEST, uuid.New())
 
 			select {
 
@@ -130,10 +130,10 @@ func (s *Server) handleTCPConnection(conn net.Conn) {
 	s.clients[uniqueID] = client
 	s.mu.Unlock()
 
-	go s.handleTCPRequest(&client)
+	go s.handleTCPRequests(&client)
 	go s.handleInboundRequests(&client)
 
-	client.SendMessage([]byte(client.Id), protocol.CONNECTION_ACCEPTED)
+	client.SendMessage([]byte(client.Id), protocol.CONNECTION_ACCEPTED, uuid.New())
 
 }
 

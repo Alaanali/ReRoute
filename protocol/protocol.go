@@ -9,6 +9,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+
+	"github.com/google/uuid"
 )
 
 const (
@@ -26,13 +28,14 @@ const VERSION = 1
 const ERROR_MESSAGE = "Something went wrong"
 
 /*
-   Version   | MessageType   |  Body Length     | body
-   1 byte    |  1 byte       |  8 bytes         | variable length
+   Version   | MessageType |  MessageID (UUID)  |  Body Length    | body
+   1 byte    |  1 byte     |      16 bytes      |  8 bytes        | variable length
 */
 
 type TunnelMessage struct {
 	Type uint8
 	Body []byte
+	Id   uuid.UUID
 }
 
 type Tunnel struct {
@@ -43,7 +46,7 @@ type Tunnel struct {
 func SerializeMessage(msg TunnelMessage) []byte {
 	finalMessage := [][]byte{}
 	finalMessage = append(finalMessage, []byte{byte(VERSION), byte(msg.Type)})
-
+	finalMessage = append(finalMessage, msg.Id[:])
 	messageLength := make([]byte, 8)
 	binary.BigEndian.PutUint64(messageLength, uint64(len(msg.Body)))
 
@@ -75,6 +78,17 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 		return nil, fmt.Errorf("invalid message type: %d", messageType)
 	}
 
+	messageID := make([]byte, 16)
+	_, err = io.ReadFull(r, messageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read message ID: %w", err)
+	}
+
+	Id, err := uuid.FromBytes(messageID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read message ID: %w", err)
+	}
+
 	var messageLength uint64
 	err = binary.Read(r, binary.BigEndian, &messageLength)
 	if err != nil {
@@ -87,13 +101,13 @@ func DeserializeMessage(r *bufio.Reader) (*TunnelMessage, error) {
 		return nil, err
 	}
 
-	msg := TunnelMessage{Body: body, Type: messageType}
+	msg := TunnelMessage{Body: body, Type: messageType, Id: Id}
 	return &msg, nil
 
 }
 
-func (t *Tunnel) SendMessage(body []byte, msgType uint8) error {
-	msg := TunnelMessage{Body: body, Type: msgType}
+func (t *Tunnel) SendMessage(body []byte, msgType uint8, id uuid.UUID) error {
+	msg := TunnelMessage{Body: body, Type: msgType, Id: id}
 	req := SerializeMessage(msg)
 	_, err := t.Conn.Write(req)
 	return err

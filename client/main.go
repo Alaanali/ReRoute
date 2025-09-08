@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/Alaanali/ReRoute/protocol"
+	"github.com/google/uuid"
 )
 
 const (
@@ -36,7 +37,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	decodedRequest, err := protocol.DecodeRequest(body)
 
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
 		return
 	}
 	defer decodedRequest.Body.Close()
@@ -46,7 +47,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	localhostURL, err := url.Parse(localhost)
 
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
 		return
 	}
 
@@ -59,7 +60,7 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 	start := time.Now()
 	resp, err := http.DefaultClient.Do(decodedRequest.WithContext(ctx))
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
 		return
 	}
 
@@ -69,10 +70,10 @@ func (c *Client) handleIncomingRequestOverTunnel(body []byte) {
 
 	encodedResponse, err := protocol.EncodeResponse(resp)
 	if err != nil {
-		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR)
+		c.SendMessage([]byte(protocol.ERROR_MESSAGE), protocol.ERROR, uuid.New())
 		return
 	}
-	c.SendMessage(encodedResponse, protocol.RESPONSE)
+	c.SendMessage(encodedResponse, protocol.RESPONSE, uuid.New())
 }
 
 func (c *Client) handleTCPConnection() {
@@ -115,7 +116,7 @@ func (client *Client) heartbeatTicker() {
 
 		case <-ticker.C:
 			if !paused {
-				client.SendMessage(nil, protocol.HEARTBEAT)
+				client.SendMessage(nil, protocol.HEARTBEAT, uuid.New())
 			}
 		}
 	}
@@ -147,10 +148,10 @@ func main() {
 	go client.handleTCPConnection()
 	go client.heartbeatTicker()
 
-	client.SendMessage([]byte{}, protocol.CONNECTION_REQUEST)
+	client.SendMessage([]byte{}, protocol.CONNECTION_REQUEST, uuid.New())
 
 	<-sigInt
 
-	client.SendMessage([]byte{}, protocol.DISCONNECT)
+	client.SendMessage([]byte{}, protocol.DISCONNECT, uuid.New())
 
 }
